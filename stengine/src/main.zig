@@ -4,86 +4,10 @@ const Allocator = std.mem.Allocator;
 const test_alloc = std.testing.allocator;
 const ArrayList = std.ArrayList;
 const expect = std.testing.expect;
-
-pub const CellValue = union(enum) {
-    int_value: i32,
-    string_value: []const u8,
-    float_value: f32,
-    bool_value: bool,
-};
-
-pub const DataType = enum {
-    Int,
-    String,
-    Float,
-    Bool,
-};
-
-pub const Column = struct {
-    name: []const u8,
-    data_type: DataType,
-};
-
-pub fn Cell(comptime T: type) type {
-    return struct {
-        const Self = @This();
-
-        column_metadata: Column,
-        data: CellValue,
-
-        pub const CellError = error{
-            DataTypeMismatch,
-            UnsupportedDataType,
-        };
-
-        pub fn create(data_value: T, column_metadata: Column) !Self {
-            const cell_type = @TypeOf(data_value);
-            var input_type: DataType = undefined;
-
-            // make sure input data matches defined column data type
-            if (cell_type == i32 or cell_type == u32 or cell_type == i64 or cell_type == u64) {
-                input_type = DataType.Int;
-                if (column_metadata.data_type != DataType.Int) {
-                    return CellError.DataTypeMismatch;
-                }
-            } else if (cell_type == []const u8) {
-                input_type = DataType.String;
-                if (column_metadata.data_type != DataType.String) {
-                    return CellError.DataTypeMismatch;
-                }
-            } else if (cell_type == f32) {
-                input_type = DataType.Float;
-                if (column_metadata.data_type != DataType.Float) {
-                    return CellError.DataTypeMismatch;
-                }
-            } else if (cell_type == bool) {
-                input_type = DataType.Bool;
-                if (column_metadata.data_type != DataType.Bool) {
-                    return CellError.DataTypeMismatch;
-                }
-            } else {
-                return CellError.UnsupportedDataType;
-            }
-
-            const data: CellValue = undefined;
-
-            if (input_type == DataType.String) {
-                data = CellValue{ .string_value = data_value };
-            } else if (input_type == DataType.Int) {
-                data = CellValue{ .int_value = data_value };
-            } else if (input_type == DataType.Float) {
-                data = CellValue{ .float_value = data_value };
-            } else if (input_type == DataType.Bool) {
-                data = CellValue{ .bool_value = data_value };
-            }
-
-            return Self{
-                .column_metadata = column_metadata,
-                .data = data,
-            };
-        }
-    };
-}
+const tst = std.testing;
+const Cell = @import("cell.zig").Cell;
+const Column = @import("cell.zig").Column;
+const DataType = @import("cell.zig").DataType;
 
 pub const Record = struct {
     id: u64,
@@ -113,6 +37,22 @@ pub const Record = struct {
     //     const record_id = std.mem.readInt(u64, data[0..4]);
     //
     // }
+};
+
+pub const TableHeader = struct {
+    columns: []Column,
+};
+
+pub const Table = struct {
+    header: TableHeader,
+    records: []Record,
+
+    pub fn create(columns: []Column, records: []Record) Table {
+        return Table{
+            .columns = columns,
+            .records = records,
+        };
+    }
 };
 
 pub fn main() !void {
@@ -153,15 +93,4 @@ pub fn main() !void {
     const serialized_record = try record.serialize(aa);
 
     print("Serialized record: {x}\n", .{serialized_record});
-
-    // const deserialized_record = try record.deserialize(aa);
-}
-
-test "cell" {
-    const column = Column{ .name = "age", .data_type = DataType.Int };
-    const value_to_store: i32 = 5;
-    _ = try Cell(i32).create(value_to_store, column);
-
-    // expect(cell.column_metadata.data_type == DataType.Int);
-    // expect(cell.data.int_value == 5);
 }

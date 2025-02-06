@@ -1,0 +1,1 @@
+I want to store this in a database column.
