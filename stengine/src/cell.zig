@@ -8,6 +8,7 @@ const Column = @import("column.zig").Column;
 
 pub const CellValue = union(enum) {
     int_value: i32,
+    bigint_value: i64,
     string_value: []const u8,
     float_value: f32,
     bool_value: bool,
@@ -28,13 +29,22 @@ pub fn Cell(comptime T: type) type {
         pub fn create(value: T, column_metadata: Column) !Self {
             const cell_type = @TypeOf(value);
 
-            if (cell_type == i32 or cell_type == u32 or cell_type == i64 or cell_type == u64) {
+            if (cell_type == i32) {
                 if (column_metadata.data_type != DataType.Int) {
                     return CellError.DataTypeMismatch;
                 } else {
                     return Self{
                         .column_metadata = column_metadata,
                         .data = CellValue{ .int_value = value },
+                    };
+                }
+            } else if (cell_type == i64) {
+                if (column_metadata.data_type != DataType.BigInt) {
+                    return CellError.DataTypeMismatch;
+                } else {
+                    return Self{
+                        .column_metadata = column_metadata,
+                        .data = CellValue{ .big_int = value },
                     };
                 }
             } else if (cell_type == []const u8) {
