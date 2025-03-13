@@ -32,6 +32,11 @@ pub const Column = struct {
     data_type: DataType,
 };
 
+pub const TableSchema = struct {
+    name: [][]const u8,
+    data_types: []DataType,
+};
+
 pub const TableHeader = struct {
     columns: []Column,
 };

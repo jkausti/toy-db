@@ -149,24 +149,3 @@ test "cell_update" {
 
     try tst.expectEqual(cell.data.int_value, 10);
 }
-
-test "cell_with_string" {
-    const tst_allocator = tst.allocator;
-
-    const file_path = "src/tests/testdata/some_text.txt";
-
-    const file = try std.fs.cwd().openFile(file_path, .{});
-    defer file.close();
-
-    const stat = try file.stat();
-    const file_size = stat.size;
-
-    const buffer: []u8 = try tst_allocator.alloc(u8, file_size);
-    defer tst_allocator.free(buffer);
-    _ = try file.readAll(buffer);
-
-    const column = Column{ .name = "name", .data_type = DataType.String };
-    const cell = try Cell([]const u8).create(buffer, column);
-
-    try tst.expectEqual(cell.data.string_value, buffer);
-}

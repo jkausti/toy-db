@@ -9,3 +9,12 @@
     * I can create rows and a table.
 2. Give prompt to user.
 
+
+## First page
+
+The first page should contain:
+* Database metadata
+  * Signature
+  * Database name
+  * Amount of pages
+

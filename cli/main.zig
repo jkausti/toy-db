@@ -35,7 +35,6 @@ pub fn main() !void {
     defer file_handle.close();
 
     const stat = try file_handle.stat();
-    const db_file_name: []const u8 = std.fs.path.basename(db_path);
 
     if (stat.size == 0) {
         // initiate database

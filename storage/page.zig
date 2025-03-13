@@ -4,8 +4,11 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const tst = std.testing;
 const assert = std.debug.assert;
+const Tuple = @import("tuple.zig").Tuple;
+const DataType = @import("column.zig").DataType;
+const CellValue = @import("cell.zig").CellValue;
 
-const PageError = error{ InvalidBufferLength, NotEnoughSpace };
+const PageError = error{ InvalidBufferLength, NotEnoughSpace, EmptyPage };
 
 /// Header that resides at the beginning of a page.
 /// Contains metadata about the page necessary to perform operations.
@@ -13,41 +16,47 @@ const PageError = error{ InvalidBufferLength, NotEnoughSpace };
 ///  - last_used_offset: Offset of the last inserted record in the page.
 ///  - free_space: Amount of free space in the page.
 ///      Generally, last_used_offset - @sizeOf(PageHeader) - slot_array_size.
+///
 pub const PageHeader = struct {
     slot_array_size: u16,
     last_used_offset: u16,
     free_space: u16, // bytes
+    page_size: u16,
 
     pub fn init(page_size: u16) PageHeader {
         return PageHeader{
             .slot_array_size = 0,
-            .last_used_offset = page_size - @sizeOf(PageHeader),
+            .last_used_offset = page_size,
             .free_space = page_size - @sizeOf(PageHeader),
+            .page_size = page_size,
         };
     }
 
     /// Serializes the PageHeader into a byte array.
-    pub fn toBytes(self: PageHeader, allocator: Allocator) ![]u8 {
-        var buffer = ArrayList(u8).init(allocator);
-        defer buffer.deinit();
+    ///
+    pub fn serialize(self: PageHeader) [@sizeOf(PageHeader)]u8 {
+        var buffer = [_]u8{0} ** @sizeOf(PageHeader);
 
-        // const free_space_bytes = try self.free_space.toBytes(allocator);
-        try buffer.appendSlice(std.mem.asBytes(&self.slot_array_size));
-        try buffer.appendSlice(std.mem.asBytes(&self.last_used_offset));
-        try buffer.appendSlice(std.mem.asBytes(&self.free_space));
-        return try buffer.toOwnedSlice();
+        std.mem.writeInt(u16, buffer[0..2], self.slot_array_size, .little);
+        std.mem.writeInt(u16, buffer[2..4], self.last_used_offset, .little);
+        std.mem.writeInt(u16, buffer[4..6], self.free_space, .little);
+        std.mem.writeInt(u16, buffer[6..8], self.page_size, .little);
+
+        return buffer;
     }
 
     /// Deserializes a byte array into a PageHeader.
-    pub fn fromBytes(bytes: []u8) PageHeader {
+    pub fn deserialize(bytes: []u8) PageHeader {
         const slot_array_size = std.mem.readInt(u16, bytes[0..2], .little);
         const last_used_offset = std.mem.readInt(u16, bytes[2..4], .little);
         const free_space = std.mem.readInt(u16, bytes[4..6], .little);
+        const page_size = std.mem.readInt(u16, bytes[6..8], .little);
 
         return PageHeader{
             .slot_array_size = slot_array_size,
             .last_used_offset = last_used_offset,
             .free_space = free_space,
+            .page_size = page_size,
         };
     }
 };
@@ -58,6 +67,10 @@ pub const SlotArray = struct {
 
     pub fn init(allocator: Allocator) !SlotArray {
         return SlotArray{ .slot_offsets = null, .allocator = allocator };
+    }
+
+    pub fn deinit(self: *SlotArray) void {
+        self.allocator.free(self.slot_offsets.?);
     }
 
     /// Inserting a slot offset into the slot array.
@@ -93,10 +106,6 @@ pub const SlotArray = struct {
         if (last_value != null) {
             assert(new_slot_array[self.slot_offsets.?.len - 2] == last_value);
         }
-    }
-
-    pub fn deinit(self: *SlotArray) void {
-        self.allocator.free(self.slot_offsets.?);
     }
 
     /// returns the slot array as a byte array.
@@ -157,236 +166,174 @@ pub const SlotArray = struct {
     }
 };
 
-/// Slotted page. Used to store a PageHeader and records.
-pub const Page = struct {
-    buffer: BufferWithHeader,
+// pub const Page = struct {
+//     header: PageHeader,
+//     slot_array: SlotArray,
+//     tuples: ?[]Tuple,
+//     allocator: Allocator,
+//
+//     pub fn init(page_size: u16, allocator: Allocator) !Page {
+//         return Page{
+//             .header = PageHeader.init(page_size),
+//             .slot_array = try SlotArray.init(allocator),
+//             .tuples = null,
+//             .allocator = allocator,
+//         };
+//     }
+//
+//     pub fn deinit(self: Page) void {
+//         self.slot_array.deinit();
+//         self.allocator.free(self.tuples.?);
+//     }
+//
+//     fn serializeTuples(self: Page) ![]u8 {
+//         if (self.tuples == null) {
+//             return;
+//         }
+//
+//         var buffer = ArrayList(u8).init(self.allocator);
+//         defer buffer.deinit();
+//
+//         for (self.tuples.?) |tuple| {
+//             const tuple_bytes = try tuple.serialize();
+//             try buffer.appendSlice(tuple_bytes);
+//         }
+//     }
+//
+//     pub fn serialize(self: Page) ![]u8 {
+//         var buffer = ArrayList(u8).init(self.allocator);
+//         defer buffer.deinit();
+//
+//         const header_bytes = self.header.serialize();
+//         const slot_array_bytes = try self.slot_array.serialize();
+//         const tuples_bytes = try self.tuples.serialize();
+//
+//         try buffer.appendSlice(&header_bytes);
+//         try buffer.appendSlice(slot_array_bytes);
+//         try buffer.appendSlice(tuples_bytes);
+//
+//         return try buffer.toOwnedSlice();
+//     }
+// };
 
-    pub fn init(allocator: Allocator, page_size: u16) !Page {
-        const buffer = try BufferWithHeader.init(allocator, page_size);
-        return Page{ .buffer = buffer };
+pub const PageBuffer = struct {
+    bytes: []u8,
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator, page_size: usize) !PageBuffer {
+        const bytes = try allocator.alloc(u8, page_size);
+        @memset(bytes, 0); // initialize the page with 0s
+
+        // set header default data
+        const header = PageHeader.init(@intCast(page_size));
+        const header_bytes = header.serialize();
+
+        @memcpy(bytes[0..@sizeOf(PageHeader)], &header_bytes);
+
+        return PageBuffer{ .bytes = bytes, .allocator = allocator };
     }
 
-    // pub fn serialize(self: *Page, allocator: Allocator) ![]u8 {
-    //     const header = self.buffer.getHeader();
-    //     const header_bytes: []u8 = try header.toBytes(allocator);
-    //
-    //     // only get initialized memory
-    //     const content_size = self.buffer.content.len;
-    //     const content = self.buffer.content[header.size..content_size];
-    //     defer buffer.deinit();
-    //
-    //     try buffer.appendSlice(header_bytes);
-    //     try buffer.appendSlice(content);
-    //     return try buffer.toOwnedSlice();
-    // }
+    pub fn deinit(self: PageBuffer) void {
+        self.allocator.free(self.bytes);
+    }
 
-    pub fn insert(self: *Page, record: []u8) !void {
+    pub fn insertTuple(self: *PageBuffer, tuple: Tuple) !void {
         // Tries to insert a record into the page if there is enough space.
         // 1. Reads the header to determine if there is space.
         // 2. If there is space, inserts the record and updates header.
         // 3. Updates the slot array
         // 3. If there is no space, returns an error.
 
-        const header = self.buffer.getHeader();
+        var header = try self.readHeader();
 
-        if (header.free_space < record.len) {
+        var slot_array: SlotArray = undefined;
+        if (header.slot_array_size == 0) {
+            slot_array = try SlotArray.init(self.allocator);
+        } else {
+            slot_array = try self.readSlotArray();
+        }
+
+        const tuple_bytes = try tuple.serialize();
+        defer self.allocator.free(tuple_bytes);
+
+        // TODO: a new page should be allocated and linked to from the current page
+        // if there is not enough space in the current page.
+        if (header.free_space < tuple_bytes.len) {
             return PageError.NotEnoughSpace;
         }
 
-        var slot_array: SlotArray = undefined;
-        defer slot_array.deinit();
-
-        if (header.slot_array_size == 0) {
-            slot_array = try SlotArray.init(self.buffer.allocator);
-        } else {
-            slot_array = try SlotArray.deserialize(
-                self.buffer.allocator,
-                self.buffer.content[0..header.slot_array_size],
-            );
-        }
-
-        const record_starting_offset: u16 = @intCast(header.last_used_offset - record.len);
-        const record_ending_offset: u16 = header.last_used_offset;
-
-        // update slot array
-        try slot_array.insert(@intCast(record_starting_offset));
-        const slot_array_bytes = try slot_array.serialize();
-        defer self.buffer.allocator.free(slot_array_bytes.?);
+        // calculate starting offset and insert into page
+        const starting_offset: u16 = @intCast(header.last_used_offset - tuple_bytes.len);
+        @memcpy(self.bytes[starting_offset..header.last_used_offset], tuple_bytes);
 
         // update header
-        const new_last_used_offset = record_starting_offset;
-        const new_slot_array_size = slot_array_bytes.?.len;
-        const new_free_space = header.free_space - record.len - 2;
+        header.free_space -= @intCast(tuple_bytes.len);
+        header.last_used_offset = @intCast(starting_offset);
+        header.slot_array_size += 2;
 
-        const new_header = PageHeader{
-            .slot_array_size = @intCast(new_slot_array_size),
-            .last_used_offset = @intCast(new_last_used_offset),
-            .free_space = @intCast(new_free_space),
-        };
+        const header_bytes = header.serialize();
+        @memcpy(self.bytes[0..@sizeOf(PageHeader)], &header_bytes);
 
-        try self.buffer.setHeader(new_header);
+        // update slot array
 
-        // update content
-        var new_content = self.buffer.getContent();
+        defer slot_array.deinit();
+        try slot_array.insert(@intCast(starting_offset));
+        const slot_array_bytes = try slot_array.serialize();
+        defer self.allocator.free(slot_array_bytes.?);
+
         @memcpy(
-            new_content[0..new_slot_array_size],
+            self.bytes[@sizeOf(PageHeader) .. @sizeOf(PageHeader) + (header.slot_array_size)],
             slot_array_bytes.?,
         );
-        @memcpy(
-            new_content[record_starting_offset..record_ending_offset],
-            record,
-        );
-
-        try self.buffer.setContent(
-            new_content,
-        );
     }
-    //
-    // pub fn update(self: *Page) void {
-    // TODO
-    // }
 
-    // pub fn delete(self: *Page) void {
-    // TODO
-    // }
-    //
-    pub fn format(
-        self: Page,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+    pub fn readHeader(self: PageBuffer) !PageHeader {
+        const header_bytes = self.bytes[0..@sizeOf(PageHeader)];
+        return PageHeader.deserialize(header_bytes);
+    }
 
-        const header = self.buffer.getHeader();
-        var slot_array = try SlotArray.deserialize(
-            self.buffer.allocator,
-            self.buffer.content[0..header.slot_array_size],
-        );
+    pub fn readSlotArray(self: PageBuffer) !SlotArray {
+        const header = try self.readHeader();
+        const slot_array_bytes = self.bytes[@sizeOf(PageHeader) .. @sizeOf(PageHeader) + header.slot_array_size];
+        return SlotArray.deserialize(self.allocator, slot_array_bytes);
+    }
+
+    pub fn getTuples(self: PageBuffer, columns: []DataType) ![]Tuple {
+        const header = try self.readHeader();
+        var slot_array = try self.readSlotArray();
         defer slot_array.deinit();
 
-        const row_amount = slot_array.slot_offsets.?.len;
-        var rows = ArrayList([]u8).init(self.buffer.allocator);
-        defer rows.deinit();
+        var tuples = ArrayList(Tuple).init(self.allocator);
+        defer tuples.deinit();
 
-        const content_size = self.buffer.content.len;
-
-        for (0..row_amount) |i| {
-            const start = slot_array.slot_offsets.?[i];
-            var end: u16 = 0;
-            if (i == 0) {
-                end = @intCast(content_size);
+        var previous_offset: u32 = 0;
+        for (slot_array.slot_offsets.?) |slot_offset| {
+            var tuple: Tuple = undefined;
+            if (previous_offset == 0) {
+                // first slot
+                tuple = try Tuple.deserialize(
+                    self.allocator,
+                    columns,
+                    self.bytes[slot_offset..header.page_size],
+                );
             } else {
-                end = slot_array.slot_offsets.?[i - 1];
+                tuple = try Tuple.deserialize(
+                    self.allocator,
+                    columns,
+                    self.bytes[slot_offset..previous_offset],
+                );
             }
-            const row = self.buffer.content[start..end];
-            try rows.append(row);
+            try tuples.append(tuple);
+            previous_offset = slot_offset;
+            std.debug.assert(tuple.data.len > 0);
+            std.debug.assert(tuple.columns.len > 0);
         }
 
-        const rows_slice = try rows.toOwnedSlice();
-        defer self.buffer.allocator.free(rows_slice);
-
-        try writer.print(
-            \\Page:
-            \\
-            \\  Header:
-            \\    SlotArraySize: {d},
-            \\    last_used_offset: {d},
-            \\    free_space: {d},
-            \\
-            \\  SlotArray: {any},
-            \\
-            \\  Rows: {s}
-            \\
-        ,
-            .{
-                header.slot_array_size,
-                header.last_used_offset,
-                header.free_space,
-                slot_array.slot_offsets,
-                rows_slice,
-            },
-        );
+        const tuple_slice = try tuples.toOwnedSlice();
+        std.debug.assert(tuple_slice.len == slot_array.slot_offsets.?.len);
+        return tuple_slice;
     }
 };
-
-/// Contains a header, content buffer and the total size of the page.
-pub const BufferWithHeader = struct {
-    header: []u8,
-    content: []u8,
-    size: u16,
-    allocator: Allocator,
-
-    pub fn init(allocator: Allocator, page_size: u16) !BufferWithHeader {
-
-        // initiating this will also initiate a PageHeader
-
-        const header_size = @sizeOf(PageHeader);
-        const content_mem = try allocator.alloc(u8, page_size - header_size);
-        @memset(content_mem, 0);
-
-        const page_header = PageHeader.init(page_size);
-        const page_header_bytes = try page_header.toBytes(allocator);
-        return BufferWithHeader{
-            .header = page_header_bytes,
-            .content = content_mem,
-            .size = page_size,
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *BufferWithHeader) void {
-        self.allocator.free(self.header);
-        self.allocator.free(self.content);
-    }
-
-    pub fn setHeader(self: *BufferWithHeader, header: PageHeader) !void {
-        const header_bytes: []u8 = try header.toBytes(self.allocator);
-        @memcpy(self.header, header_bytes);
-        self.allocator.free(header_bytes);
-    }
-
-    pub fn getHeader(self: BufferWithHeader) PageHeader {
-        const header = PageHeader.fromBytes(self.header);
-        return header;
-    }
-
-    pub fn getContent(self: *BufferWithHeader) []u8 {
-        return self.content;
-    }
-
-    pub fn setContent(self: *BufferWithHeader, content: []u8) !void {
-        const new_content = try self.allocator.alloc(u8, self.size - @sizeOf(PageHeader));
-        @memcpy(new_content, content);
-        self.allocator.free(self.content);
-        self.content = new_content;
-    }
-};
-
-test "bufferWithHeader_mem_leak" {
-    const allocator = tst.allocator;
-    const PAGE_SIZE: u16 = 4096;
-
-    var buffer = try BufferWithHeader.init(allocator, PAGE_SIZE);
-    defer buffer.deinit();
-}
-
-test "bufferWithHeader_setgetHeader" {
-    const allocator = tst.allocator;
-    const PAGE_SIZE: u16 = 4096;
-
-    var buffer = try BufferWithHeader.init(allocator, PAGE_SIZE);
-    defer buffer.deinit();
-
-    const header = PageHeader.init(PAGE_SIZE);
-    try buffer.setHeader(header);
-
-    const header_from_buffer = buffer.getHeader();
-    try tst.expect(header_from_buffer.slot_array_size == 0);
-    try tst.expect(header_from_buffer.last_used_offset == (PAGE_SIZE - @sizeOf(PageHeader)));
-    try tst.expect(header_from_buffer.free_space == (PAGE_SIZE - @sizeOf(PageHeader)));
-}
 
 test "SlotArray" {
     const allocator = tst.allocator;
@@ -401,7 +348,7 @@ test "SlotArray" {
     try tst.expect(slot_array.slot_offsets.?[2] == 4);
 }
 
-test "serialize_slotarray" {
+test "serialize_SlotArray" {
     const allocator = tst.allocator;
     var slot_array = try SlotArray.init(allocator);
     defer slot_array.deinit();
@@ -425,33 +372,89 @@ test "serialize_slotarray" {
     try tst.expect(new_slot_array.slot_offsets.?[2] == 99);
 }
 
-test "page" {
-    const allocator = tst.allocator;
-    const PAGE_SIZE: u16 = 4096;
+test "PageBuffer" {
+    var log_allocator = std.heap.loggingAllocator(tst.allocator);
+    const allocator = log_allocator.allocator();
 
-    var page = try Page.init(allocator, PAGE_SIZE);
-    defer page.buffer.deinit();
+    const PAGE_SIZE = 4096;
 
-    const record1 = "hello";
-    const record_bytes1 = try allocator.alloc(u8, record1.len);
-    defer allocator.free(record_bytes1);
-    @memcpy(record_bytes1, record1);
+    var page_buffer = try PageBuffer.init(allocator, PAGE_SIZE);
+    defer page_buffer.deinit();
 
-    const record2 = "world";
-    const record_bytes2 = try allocator.alloc(u8, record2.len);
-    defer allocator.free(record_bytes2);
-    @memcpy(record_bytes2, record2);
+    const columns_lit = [_]DataType{
+        DataType.Int,
+        DataType.String,
+    };
+    const columns = try allocator.dupe(DataType, &columns_lit);
+    defer allocator.free(columns);
 
-    const record3 = "!";
-    const record_bytes3 = try allocator.alloc(u8, record3.len);
-    defer allocator.free(record_bytes3);
-    @memcpy(record_bytes3, record3);
+    const cells_lit = [_]CellValue{
+        CellValue{ .int_value = 10 },
+        CellValue{ .string_value = "hello world" },
+    };
+    const cells = try allocator.dupe(CellValue, &cells_lit);
+    defer allocator.free(cells);
 
-    try page.insert(record_bytes1);
-    try page.insert(record_bytes2);
-    try page.insert(record_bytes3);
+    const tuple = try Tuple.create(
+        allocator,
+        columns,
+        cells,
+    );
+    defer tuple.deinit();
 
-    try tst.expect(page.buffer.getHeader().slot_array_size == 6);
+    try page_buffer.insertTuple(tuple);
 
-    print("{any}\n", .{page});
+    const header = try page_buffer.readHeader();
+    var slot_array = try page_buffer.readSlotArray();
+    defer slot_array.deinit();
+
+    try tst.expect(header.free_space == PAGE_SIZE - @sizeOf(PageHeader) - 17);
+    try tst.expect(header.slot_array_size == 2);
+    try tst.expect(slot_array.slot_offsets.?.len == 1);
+}
+
+test "getTuples" {
+    var log_allocator = std.heap.loggingAllocator(tst.allocator);
+    const allocator = log_allocator.allocator();
+
+    const PAGE_SIZE = 4096;
+
+    var page_buffer = try PageBuffer.init(allocator, PAGE_SIZE);
+    defer page_buffer.deinit();
+
+    const columns_lit = [_]DataType{
+        DataType.Int,
+        DataType.String,
+    };
+    const columns = try allocator.dupe(DataType, &columns_lit);
+    defer allocator.free(columns);
+
+    const cells_lit = [_]CellValue{
+        CellValue{ .int_value = 10 },
+        CellValue{ .string_value = "hello world" },
+    };
+    const cells = try allocator.dupe(CellValue, &cells_lit);
+    defer allocator.free(cells);
+
+    const tuple = try Tuple.create(
+        allocator,
+        columns,
+        cells,
+    );
+    defer tuple.deinit();
+
+    try page_buffer.insertTuple(tuple);
+
+    const tuples = try page_buffer.getTuples(columns);
+    defer allocator.free(tuples);
+    defer {
+        for (tuples) |t| {
+            t.deinit();
+        }
+    }
+
+    try tst.expect(tuples.len == 1);
+    try tst.expect(tuples[0].data.len == 2);
+    try tst.expect(tuples[0].data[0].int_value == 10);
+    try tst.expect(std.mem.eql(u8, tuples[0].data[1].string_value, "hello world"));
 }
