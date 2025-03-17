@@ -22,6 +22,7 @@ pub const PageHeader = struct {
     last_used_offset: u16,
     free_space: u16, // bytes
     page_size: u16,
+    next_page: u64, // offset in the file of the next page. Set to 0 if there is no next page.
 
     pub fn init(page_size: u16) PageHeader {
         return PageHeader{
@@ -29,6 +30,7 @@ pub const PageHeader = struct {
             .last_used_offset = page_size,
             .free_space = page_size - @sizeOf(PageHeader),
             .page_size = page_size,
+            .next_page = 0,
         };
     }
 
@@ -41,6 +43,7 @@ pub const PageHeader = struct {
         std.mem.writeInt(u16, buffer[2..4], self.last_used_offset, .little);
         std.mem.writeInt(u16, buffer[4..6], self.free_space, .little);
         std.mem.writeInt(u16, buffer[6..8], self.page_size, .little);
+        std.mem.writeInt(u64, buffer[8..16], self.next_page, .little);
 
         return buffer;
     }
@@ -51,12 +54,14 @@ pub const PageHeader = struct {
         const last_used_offset = std.mem.readInt(u16, bytes[2..4], .little);
         const free_space = std.mem.readInt(u16, bytes[4..6], .little);
         const page_size = std.mem.readInt(u16, bytes[6..8], .little);
+        const next_page = std.mem.readInt(u64, bytes[8..16], .little);
 
         return PageHeader{
             .slot_array_size = slot_array_size,
             .last_used_offset = last_used_offset,
             .free_space = free_space,
             .page_size = page_size,
+            .next_page = next_page,
         };
     }
 };
@@ -240,9 +245,9 @@ pub const PageBuffer = struct {
     pub fn insertTuple(self: *PageBuffer, tuple: Tuple) !void {
         // Tries to insert a record into the page if there is enough space.
         // 1. Reads the header to determine if there is space.
-        // 2. If there is space, inserts the record and updates header.
-        // 3. Updates the slot array
-        // 3. If there is no space, returns an error.
+        // 2a. If there is space, inserts the record and updates header.
+        // TODO: 2b. If there is no space, creates a new page and inserts the record there.
+        // 3a. Updates the slot array
 
         var header = try self.readHeader();
 

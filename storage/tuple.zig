@@ -204,10 +204,12 @@ pub const Tuple = struct {
         options: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        _ = fmt;
-        _ = options;
-
-        try writer.print("{any}", .{self.data});
+        try writer.print("( ", .{});
+        for (self.data) |cell| {
+            try cell.format(fmt, options, writer);
+            try writer.print(", ", .{});
+        }
+        try writer.print(")", .{});
     }
 };
 

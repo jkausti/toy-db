@@ -1,5 +1,5 @@
 
-* [ ] Implement dbpage.zig
+* [x] Implement dbpage.zig
 * [ ] Implement db.zig
     - When initializing, a PageZero should be created at the
       beginning of the file with necessery data

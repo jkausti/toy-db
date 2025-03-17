@@ -19,11 +19,22 @@ pub const PageTableEntry = struct {
     page: PageBuffer,
     dirty: bool, // indicates if a page has been modified since it was read
     removed: bool, // indicates if a page has been removed from the page table
+
+    pub fn format(
+        self: PageTableEntry,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("PageTableEntry(offset: {d}, dirty: {any}, removed: {any})", .{ self.offset, self.dirty, self.removed });
+    }
 };
 
 pub const BufferManager = struct {
     page_directory: PageDirectory, // permanent, always present in memory
-    master_page: PageBuffer, // permanent, always present in memory
+    master_root_page: PageBuffer, // permanent, always present in memory
     page_table: ArrayList(PageTableEntry), // contents get swapped in and out of memory
     allocator: Allocator,
 
@@ -41,22 +52,20 @@ pub const BufferManager = struct {
 
     pub fn init(allocator: Allocator, database_name: []const u8) !BufferManager {
         const page_directory = try PageDirectory.init(allocator, database_name);
-        const master_page = try BufferManager.initMaster(allocator);
+        const master_root_page = try BufferManager.initMaster(allocator);
         const page_table = ArrayList(PageTableEntry).init(allocator);
         return BufferManager{
             .page_directory = page_directory,
-            .master_page = master_page,
+            .master_root_page = master_root_page,
             .page_table = page_table,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *BufferManager) void {
-        // called on shutdown
-        try self.flush();
         self.page_directory.deinit();
-        self.master_page.deinit();
-        for (self.page_table) |entry| {
+        self.master_root_page.deinit();
+        for (self.page_table.items) |entry| {
             entry.page.deinit();
         }
         self.page_table.deinit();
@@ -139,10 +148,10 @@ pub const BufferManager = struct {
         // then we write the rest of the pages at their correct offset
         // if a page is not on disk, it will be added to the end of the file
 
-        for (self.page_table) |entry| {
+        for (self.page_table.items) |*entry| {
             if (entry.dirty) {
                 const page_bytes = entry.page.bytes;
-                try file.pwriteAll(page_bytes, entry.offset);
+                try file.pwriteAll(page_bytes, @intCast(entry.offset));
                 entry.dirty = false;
                 continue;
             } else {
@@ -153,7 +162,7 @@ pub const BufferManager = struct {
             }
         }
 
-        for (self.page_table, 0..) |entry, i| {
+        for (self.page_table.items, 0..) |entry, i| {
             if (entry.removed) {
                 _ = self.page_table.orderedRemove(i);
             }
@@ -167,19 +176,60 @@ pub const BufferManager = struct {
         try file.pwriteAll(page_directory_bytes, 0);
 
         // then we write the master page
-        const master_page_bytes = self.master_page.bytes;
-        try file.pwriteAll(master_page_bytes, MASTER_PAGE_START);
+        const master_root_page_bytes = self.master_root_page.bytes;
+        try file.pwriteAll(master_root_page_bytes, MASTER_PAGE_START);
     }
 
-    pub fn addPage(self: *BufferManager, page: PageBuffer) !void {
+    pub fn updateMaster(
+        self: *BufferManager,
+        schema: []Column,
+        schema_name: []const u8,
+        table_name: []const u8,
+        root_page: i64,
+    ) !void {
+
+        // for each column in the schema, we need to add a row to the master page
+
+        for (schema) |column| {
+            const master_schema = BufferManager.masterSchema();
+            const data = [5]CellValue{
+                CellValue{ .string_value = schema_name },
+                CellValue{ .string_value = table_name },
+                CellValue{ .bigint_value = root_page },
+                CellValue{ .string_value = column.name },
+                CellValue{ .string_value = column.datatypeAsString() },
+            };
+            const data_slice = try self.allocator.dupe(CellValue, &data);
+            defer self.allocator.free(data_slice);
+
+            const master_schema_heap = try self.allocator.dupe(DataType, &master_schema);
+            defer self.allocator.free(master_schema_heap);
+
+            // const cell_values = try self.allocator.dupe(CellValue, &data);
+            // defer self.allocator.free(cell_values);
+
+            const tuple = try Tuple.create(
+                self.allocator,
+                master_schema_heap,
+                data_slice,
+            );
+            defer tuple.deinit();
+
+            try self.master_root_page.insertTuple(tuple);
+        }
+    }
+
+    pub fn addPage(self: *BufferManager, page: PageBuffer) !u64 {
         const new_offset = try self.page_directory.getNextOffset();
+
         const entry = PageTableEntry{
-            .offset = new_offset,
+            .offset = @intCast(new_offset),
             .page = page,
             .dirty = true,
             .removed = false,
         };
         try self.page_table.append(entry);
+        return new_offset;
     }
 };
 
@@ -199,16 +249,17 @@ test "init_BufferManager" {
     // const allocator = arena.allocator();
 
     const allocator = std.testing.allocator;
+    const file = try std.fs.cwd().createFile("test.db", .{ .read = true, .truncate = true });
 
     var buffer_manager = try BufferManager.init(allocator, "urmom69");
     defer buffer_manager.deinit();
 
-    const master_page = buffer_manager.master_page;
+    const master_root_page = buffer_manager.master_root_page;
 
     const schema = BufferManager.masterSchema();
     const schema_heap = try allocator.dupe(DataType, &schema);
     defer allocator.free(schema_heap);
-    const tuples = try master_page.getTuples(schema_heap);
+    const tuples = try master_root_page.getTuples(schema_heap);
     defer {
         for (tuples) |t| {
             t.deinit();
@@ -217,17 +268,50 @@ test "init_BufferManager" {
     }
 
     try tst.expect(tuples.len == 5);
+    try buffer_manager.flush(file);
 }
 
 test "flushHeaderMasterPage" {
     const allocator = std.testing.allocator;
     var buffer_manager = try BufferManager.init(allocator, "urmom69");
-    defer buffer_manager.deinit();
-
     const file = try std.fs.cwd().createFile("test.db", .{ .read = true, .truncate = false });
+
+    defer buffer_manager.deinit();
     defer file.close();
 
     try buffer_manager.flushHeaderMasterPage(file);
+}
+
+test "updateMaster" {
+    const allocator = std.testing.allocator;
+    var buffer_manager = try BufferManager.init(allocator, "urmom69");
+    defer buffer_manager.deinit();
+
+    const columns = [3]Column{
+        Column{ .name = "id", .data_type = DataType.BigInt },
+        Column{ .name = "name", .data_type = DataType.String },
+        Column{ .name = "age", .data_type = DataType.Int },
+    };
+    const columns_slice = try allocator.dupe(Column, &columns);
+    defer allocator.free(columns_slice);
+
+    const schema_name = "main";
+    const table_name = "people";
+
+    _ = try buffer_manager.updateMaster(columns_slice, schema_name, table_name, 10);
+
+    const master_schema = BufferManager.masterSchema();
+    const master_schema_slice = try allocator.dupe(DataType, &master_schema);
+    defer allocator.free(master_schema_slice);
+    const updated_master_root_page_tuples = try buffer_manager.master_root_page.getTuples(master_schema_slice);
+    defer {
+        for (updated_master_root_page_tuples) |t| {
+            t.deinit();
+        }
+        allocator.free(updated_master_root_page_tuples);
+    }
+
+    try tst.expect(updated_master_root_page_tuples.len == 8);
 }
 
 test "createTable" {
@@ -235,43 +319,69 @@ test "createTable" {
     const file = try std.fs.cwd().createFile("test.db", .{ .read = true, .truncate = true });
 
     var buffer_manager = try BufferManager.init(allocator, "urmom69");
-    
+    defer buffer_manager.deinit();
+
     const columns = [3]Column{
-        Column{ .name = "id", .datatype = DataType.BigInt },
-        Column{ .name = "name", .datatype = DataType.String },
-        Column{ .name = "age", .datatype = DataType.Int },
+        Column{ .name = "id", .data_type = DataType.BigInt },
+        Column{ .name = "name", .data_type = DataType.String },
+        Column{ .name = "age", .data_type = DataType.Int },
     };
-    
+
+    const columns_slice = try allocator.dupe(Column, &columns);
+    defer allocator.free(columns_slice);
+
     const schema_name = "main";
     const table_name = "people";
-    
-    const master_schema = BufferManager.masterSchema();
-    const master_schema_heap = try allocator.dupe(DataType, &master_schema);
-    defer allocator.free(master_schema_heap);
 
-    const master_page_tuples = try buffer_manager.master_page.getTuples(master_schema_heap);
-    
+    const master_schema = BufferManager.masterSchema();
+    const master_schema_slice = try allocator.dupe(DataType, &master_schema);
+    defer allocator.free(master_schema_slice);
+
+    const master_root_page_tuples = try buffer_manager.master_root_page.getTuples(master_schema_slice);
+
     defer {
-        for (master_page_tuples) |t| {
+        for (master_root_page_tuples) |t| {
             t.deinit();
         }
-        allocator.free(master_page_tuples);
+        allocator.free(master_root_page_tuples);
     }
 
     // get the next page_id
-    var next_page_id = 0;
-    for (master_page_tuples) |t| {
+    // looping through tuples and looking at third column (root_page)
+    // new page_id will be the max of all the page_ids + 1
+    var next_page_id: i64 = 0;
+    for (master_root_page_tuples) |t| {
         const page_id = switch (t.data[2]) {
-            CellValue{ .bigint_value } => |val| val,
+            .bigint_value => |val| val,
             else => unreachable,
         };
         if (page_id > next_page_id) {
             next_page_id = page_id;
         }
     }
+    next_page_id += 1;
 
     // insert new data into master page
+
+    try buffer_manager.updateMaster(columns_slice, schema_name, table_name, next_page_id);
+
     // create new page and add to page_directory
-    // add new page to buffer_manager
+    const new_page = try PageBuffer.init(allocator, 4096);
+
+    const new_page_offset = try buffer_manager.addPage(new_page);
+    try buffer_manager.page_directory.insertPageDirEntry(@intCast(next_page_id), new_page_offset);
+
     // flush buffer_manager to disk
+    try buffer_manager.flush(file);
+
+    // test that the new page is in the page_directory
+    const page_dir_schema = try PageDirectory.getSchema();
+    const page_directory_tuples = try buffer_manager.page_directory.page.getTuples(page_dir_schema);
+    defer {
+        for (page_directory_tuples) |t| {
+            t.deinit();
+        }
+        allocator.free(page_directory_tuples);
+    }
+    try tst.expect(page_directory_tuples.len == 3);
 }

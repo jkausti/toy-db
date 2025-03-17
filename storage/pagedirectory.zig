@@ -51,8 +51,8 @@ pub const PageDirectory = struct {
         var page = try PageBuffer.init(allocator, @intCast(FIRST_PAGE_SIZE - DbMetadata.sizeOnDisk()));
 
         // insert a row for the first page manually trough the PageBuffer API
-        const first_page_tuple = try PageDirectory.createPageDirEntryTuple(allocator, 1, 0);
-        const second_page_tuple = try PageDirectory.createPageDirEntryTuple(allocator, 2, FIRST_PAGE_SIZE);
+        const first_page_tuple = try PageDirectory.createPageDirEntryTuple(allocator, 0, 0);
+        const second_page_tuple = try PageDirectory.createPageDirEntryTuple(allocator, 1, FIRST_PAGE_SIZE);
         defer first_page_tuple.deinit();
         defer second_page_tuple.deinit();
 
@@ -106,8 +106,12 @@ pub const PageDirectory = struct {
         );
     }
 
-    pub fn insertPageDirEntry(self: *PageDirectory, page_id: u32, offset: usize) !void {
-        const pagedir_tuple = try PageDirectory.createPageDirEntryTuple(self.allocator, page_id, offset);
+    pub fn insertPageDirEntry(self: *PageDirectory, page_id: u32, offset: u64) !void {
+        const pagedir_tuple = try PageDirectory.createPageDirEntryTuple(
+            self.allocator,
+            page_id,
+            @intCast(offset),
+        );
         defer pagedir_tuple.deinit();
 
         try self.page.insertTuple(pagedir_tuple);
@@ -340,8 +344,8 @@ test "PageDirectory_getOffset" {
     var page_dir = try PageDirectory.init(allocator, "test_db");
     defer page_dir.deinit();
 
-    const page_1_offset = try page_dir.getOffset(1);
-    const page_2_offset = try page_dir.getOffset(2);
+    const page_1_offset = try page_dir.getOffset(0);
+    const page_2_offset = try page_dir.getOffset(1);
 
     try tst.expect(page_1_offset == 0);
     try tst.expect(page_2_offset == 8192);
@@ -358,9 +362,9 @@ test "fillPageMap" {
 
     try page_dir.fillPageMap(&map);
 
-    const offset1 = map.get(1);
+    const offset1 = map.get(0);
     try tst.expect(offset1.? == 0);
 
-    const offset2 = map.get(2);
+    const offset2 = map.get(1);
     try tst.expect(offset2.? == 8192);
 }
