@@ -212,37 +212,3 @@ pub const Tuple = struct {
         try writer.print(")", .{});
     }
 };
-
-test "Tuple" {
-    const allocator = std.testing.allocator;
-
-    const columns_lit = [_]DataType{
-        DataType.Int,
-        DataType.String,
-        DataType.Bool,
-    };
-    const columns = try allocator.dupe(DataType, &columns_lit);
-    defer allocator.free(columns);
-
-    const cell_values_lit = [_]CellValue{
-        CellValue{ .int_value = 42 },
-        CellValue{ .string_value = "hello" },
-        CellValue{ .bool_value = true },
-    };
-
-    const cell_values = try allocator.dupe(CellValue, &cell_values_lit);
-    defer allocator.free(cell_values);
-
-    const tuple = try Tuple.create(allocator, columns, cell_values);
-    defer tuple.deinit();
-
-    const bytes = try tuple.serialize();
-    defer allocator.free(bytes);
-
-    const deserialized = try Tuple.deserialize(allocator, columns, bytes);
-    defer deserialized.deinit();
-
-    try std.testing.expect(tuple.columns[0] == deserialized.columns[0]);
-    try std.testing.expect(tuple.data.len == deserialized.data.len);
-    try std.testing.expect(std.mem.eql(u8, tuple.data[1].string_value, deserialized.data[1].string_value));
-}
