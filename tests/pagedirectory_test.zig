@@ -17,12 +17,13 @@ test "DbMetadata" {
     const metadata = DbMetadata{
         .signature = "dbstar2",
         .db_name = "test_db",
-        .page_count = 1,
+        .page_count = 2,
     };
 
     const buf = try metadata.serialize(allocator);
     defer allocator.free(buf);
-    const deserialized = try DbMetadata.deserialize(buf);
+    var deserialized = try DbMetadata.deserialize(allocator, buf);
+    defer deserialized.deinit(allocator);
 
     try tst.expect(std.mem.eql(u8, metadata.signature, deserialized.signature));
     try tst.expect(std.mem.eql(u8, metadata.db_name, deserialized.db_name));
@@ -51,7 +52,11 @@ test "PageDirectory_insert" {
 
     const buf = try page_dir.serialize();
     defer allocator.free(buf);
-    const deserialized = try PageDirectory.deserialize(allocator, buf);
+    var deserialized = try PageDirectory.deserialize(allocator, buf);
+    defer deserialized.deinit();
+
+    // print("Initialized metadata: {any}\n", .{page_dir.metadata});
+    // print("Deserialized metadata: {any}\n", .{deserialized.metadata});
 
     try tst.expect(std.mem.eql(u8, page_dir.metadata.signature, deserialized.metadata.signature));
     try tst.expect(std.mem.eql(u8, page_dir.metadata.db_name, deserialized.metadata.db_name));
@@ -88,3 +93,13 @@ test "fillPageMap" {
     const offset2 = map.get(1);
     try tst.expect(offset2.? == 8192);
 }
+
+// test "sizeOfMetadata" {
+//     // const allocator = tst.allocator;
+//     const metadata = DbMetadata{
+//         .signature = "dbstar2",
+//         .db_name = "test_db",
+//         .page_count = 1,
+//     };
+//     print("Size of DbMetadata: {}\n", .{@sizeOf(@TypeOf(metadata))});
+// }

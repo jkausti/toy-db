@@ -4,6 +4,7 @@ const print = std.debug.print;
 const ArrayList = std.ArrayList;
 const File = std.fs.File;
 const PageDirectory = @import("pagedirectory.zig").PageDirectory;
+const DbMetadata = @import("pagedirectory.zig").DbMetadata;
 const PageBuffer = @import("page.zig").PageBuffer;
 const DataType = @import("column.zig").DataType;
 const Column = @import("column.zig").Column;
@@ -11,6 +12,7 @@ const CellValue = @import("cell.zig").CellValue;
 const Tuple = @import("tuple.zig").Tuple;
 const Allocator = std.mem.Allocator;
 
+const FIRST_PAGE_SIZE = @import("pagedirectory.zig").FIRST_PAGE_SIZE;
 const MASTER_PAGE_START = 8192;
 const MASTER_PAGE_SIZE = 4096;
 
@@ -50,9 +52,32 @@ pub const BufferManager = struct {
         return columns_array;
     }
 
-    pub fn init(allocator: Allocator, database_name: []const u8) !BufferManager {
-        const page_directory = try PageDirectory.init(allocator, database_name);
-        const master_root_page = try BufferManager.initMaster(allocator);
+    pub fn init(allocator: Allocator, database_name: ?[]const u8, file_handle: ?File) !BufferManager {
+        // const page_directory = try allocator.create(PageDirectory);
+        // const master_root_page = try allocator.create(PageBuffer);
+        // defer allocator.destroy(page_directory);
+        // defer allocator.destroy(master_root_page);
+        var page_directory: PageDirectory = undefined;
+        var master_root_page: PageBuffer = undefined;
+
+        if (file_handle != null) {
+            var buffer = try allocator.alloc(u8, FIRST_PAGE_SIZE + MASTER_PAGE_SIZE);
+            defer allocator.free(buffer);
+
+            _ = try file_handle.?.readAll(buffer);
+
+            page_directory = try PageDirectory.deserialize(allocator, buffer[0..FIRST_PAGE_SIZE]);
+
+            const page_buffer = try allocator.alloc(u8, MASTER_PAGE_SIZE);
+            @memcpy(page_buffer, buffer[FIRST_PAGE_SIZE .. FIRST_PAGE_SIZE + MASTER_PAGE_SIZE]);
+            master_root_page = PageBuffer{
+                .allocator = allocator,
+                .bytes = page_buffer,
+            };
+        } else {
+            page_directory = try PageDirectory.init(allocator, database_name.?);
+            master_root_page = try BufferManager.initMaster(allocator);
+        }
         const page_table = ArrayList(PageTableEntry).init(allocator);
         return BufferManager{
             .page_directory = page_directory,
@@ -81,12 +106,6 @@ pub const BufferManager = struct {
 
         for (data) |row| {
             const slice = try allocator.alloc(CellValue, row.len);
-            // defer {
-            //     for (slice) |cell| {
-            //         allocator.free(cell);
-            //     }
-            //     allocator.free(slice);
-            // }
             defer allocator.free(slice);
 
             @memcpy(slice, &row);
@@ -232,5 +251,3 @@ pub const BufferManager = struct {
         return new_offset;
     }
 };
-
-// Tests have been moved to tests/buffermanager_test.zig

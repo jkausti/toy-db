@@ -20,7 +20,7 @@ const CellValue = @import("cell.zig").CellValue;
 ///
 const SIGNATURE_LENGTH = 7;
 const MAX_DB_NAME_LENGTH = 32;
-const FIRST_PAGE_SIZE = 8192;
+pub const FIRST_PAGE_SIZE = 8192;
 const NORMAL_PAGE_SIZE = 4096;
 
 const PageDirError = error{
@@ -43,11 +43,18 @@ pub const PageDirectory = struct {
     /// only called when a database is created, otherwise it is constructed
     /// with the deserialize method
     pub fn init(allocator: Allocator, db_name: []const u8) !PageDirectory {
-        const metadata = DbMetadata{
-            .signature = "dbstar2",
-            .db_name = db_name,
-            .page_count = 2,
-        };
+
+        // metadata.* = DbMetadata{
+        //     .signature = "dbstar2",
+        //     .db_name = db_name,
+        //     .page_count = 2,
+        // };
+        const metadata = try DbMetadata.init(
+            allocator,
+            "dbstar2",
+            db_name,
+        );
+
         var page = try PageBuffer.init(allocator, @intCast(FIRST_PAGE_SIZE - DbMetadata.sizeOnDisk()));
 
         // insert a row for the first page manually trough the PageBuffer API
@@ -68,6 +75,7 @@ pub const PageDirectory = struct {
 
     pub fn deinit(self: *PageDirectory) void {
         self.page.deinit();
+        self.metadata.deinit(self.allocator);
     }
 
     pub fn serialize(self: PageDirectory) ![]u8 {
@@ -83,8 +91,12 @@ pub const PageDirectory = struct {
     }
 
     pub fn deserialize(allocator: Allocator, buf: []u8) !PageDirectory {
-        const metadata = try DbMetadata.deserialize(buf[0..DbMetadata.sizeOnDisk()]);
-        const page = PageBuffer{ .allocator = allocator, .bytes = buf[DbMetadata.sizeOnDisk()..] };
+        // const metadata = try allocator.create(DbMetadata);
+        const metadata = try DbMetadata.deserialize(allocator, buf[0..DbMetadata.sizeOnDisk()]);
+        const page_bytes = try allocator.alloc(u8, FIRST_PAGE_SIZE - DbMetadata.sizeOnDisk());
+        @memcpy(page_bytes, buf[DbMetadata.sizeOnDisk()..]);
+        const page = PageBuffer{ .allocator = allocator, .bytes = page_bytes };
+
         return PageDirectory{
             .metadata = metadata,
             .page = page,
@@ -218,14 +230,40 @@ pub const DbMetadata = struct {
         return SIGNATURE_LENGTH + MAX_DB_NAME_LENGTH + 4 + 1;
     }
 
+    pub fn init(allocator: Allocator, signature: []const u8, db_name: []const u8) !DbMetadata {
+        if (signature.len != SIGNATURE_LENGTH) {
+            return PageDirError.OutOfRange;
+        }
+        if (db_name.len > MAX_DB_NAME_LENGTH) {
+            return PageDirError.OutOfRange;
+        }
+
+        const signature_bytes = try allocator.alloc(u8, signature.len);
+        @memcpy(signature_bytes[0..signature.len], signature);
+
+        const db_name_bytes = try allocator.alloc(u8, db_name.len);
+        @memcpy(db_name_bytes[0..db_name.len], db_name);
+
+        return DbMetadata{
+            .signature = signature_bytes,
+            .db_name = db_name_bytes,
+            .page_count = 2,
+        };
+    }
+
+    pub fn deinit(self: *DbMetadata, allocator: Allocator) void {
+        allocator.free(self.signature);
+        allocator.free(self.db_name);
+    }
+
     pub fn serialize(self: DbMetadata, allocator: Allocator) ![]u8 {
         const buf = try allocator.alloc(u8, DbMetadata.sizeOnDisk());
         @memset(buf, 0);
         var offset: usize = 0;
 
         // write signature to the beginning
-        @memcpy(buf[0..self.signature.len], self.signature);
-        offset = self.signature.len;
+        @memcpy(buf[0..SIGNATURE_LENGTH], self.signature);
+        offset = SIGNATURE_LENGTH;
 
         // write db_name length (1 byte) and db_name (max 31 bytes)
         const db_name_len: u8 = @intCast(self.db_name.len);
@@ -257,13 +295,16 @@ pub const DbMetadata = struct {
         return buf;
     }
 
-    pub fn deserialize(buf: []const u8) !DbMetadata {
+    pub fn deserialize(allocator: Allocator, buf: []const u8) !DbMetadata {
         if (buf.len != DbMetadata.sizeOnDisk()) {
             return PageDirError.InvalidBufferLength;
         }
 
+        const signature_bytes = try allocator.alloc(u8, SIGNATURE_LENGTH);
+
         var offset: usize = 0;
-        const signature = buf[offset..SIGNATURE_LENGTH];
+        // const signature = buf[offset..SIGNATURE_LENGTH];
+        @memcpy(signature_bytes[0..SIGNATURE_LENGTH], buf[offset..SIGNATURE_LENGTH]);
         offset += SIGNATURE_LENGTH;
 
         // read db_name length and db_name
@@ -273,7 +314,9 @@ pub const DbMetadata = struct {
             .little,
         );
         offset += 1;
-        const db_name = buf[offset .. offset + db_name_len];
+
+        const dbname_bytes = try allocator.alloc(u8, db_name_len);
+        @memcpy(dbname_bytes[0..db_name_len], buf[offset .. offset + db_name_len]);
         offset += 31;
 
         // read page_count
@@ -284,10 +327,21 @@ pub const DbMetadata = struct {
         );
         offset += 4;
 
-        return DbMetadata{
-            .signature = signature,
-            .db_name = db_name,
+        const metadata = DbMetadata{
+            .signature = signature_bytes,
+            .db_name = dbname_bytes,
             .page_count = page_count,
         };
+        return metadata;
+    }
+
+    pub fn format(self: DbMetadata, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("DbMetadata{{\n", .{});
+        try writer.print("\tsignature: {s}\n", .{self.signature});
+        try writer.print("\tdb_name: {s}\n", .{self.db_name});
+        try writer.print("\tpage_count: {d}\n", .{self.page_count});
+        try writer.print("}}\n", .{});
     }
 };

@@ -24,7 +24,7 @@ test "init_BufferManager" {
     const allocator = std.testing.allocator;
     const file = try std.fs.cwd().createFile("test.db", .{ .read = true, .truncate = true });
 
-    var buffer_manager = try BufferManager.init(allocator, "urmom69");
+    var buffer_manager = try BufferManager.init(allocator, "urmom69", null);
     defer buffer_manager.deinit();
 
     const master_root_page = buffer_manager.master_root_page;
@@ -46,7 +46,7 @@ test "init_BufferManager" {
 
 test "flush" {
     const allocator = std.testing.allocator;
-    var buffer_manager = try BufferManager.init(allocator, "urmom69");
+    var buffer_manager = try BufferManager.init(allocator, "urmom69", null);
     const file = try std.fs.cwd().createFile("test.db", .{ .read = true, .truncate = false });
 
     defer buffer_manager.deinit();
@@ -58,7 +58,7 @@ test "flush" {
 
 test "updateMaster" {
     const allocator = std.testing.allocator;
-    var buffer_manager = try BufferManager.init(allocator, "urmom69");
+    var buffer_manager = try BufferManager.init(allocator, "urmom69", null);
     defer buffer_manager.deinit();
 
     const columns = [3]Column{
@@ -92,7 +92,7 @@ test "createTable" {
     const allocator = std.testing.allocator;
     const file = try std.fs.cwd().createFile("test.db", .{ .read = true, .truncate = true });
 
-    var buffer_manager = try BufferManager.init(allocator, "urmom69");
+    var buffer_manager = try BufferManager.init(allocator, "urmom69", null);
     defer buffer_manager.deinit();
 
     const columns = [3]Column{
@@ -158,4 +158,40 @@ test "createTable" {
         allocator.free(page_directory_tuples);
     }
     try tst.expect(page_directory_tuples.len == 3);
+}
+
+test "initFromDisk" {
+    const allocator = std.testing.allocator;
+    const file = try std.fs.cwd().openFile("test.db", .{});
+    defer file.close();
+
+    var buffer_manager = try BufferManager.init(allocator, null, file);
+    defer buffer_manager.deinit();
+
+    // Check that the master root page is initialized correctly
+    const master_schema = BufferManager.masterSchema();
+    const master_schema_slice = try allocator.dupe(DataType, &master_schema);
+    defer allocator.free(master_schema_slice);
+    const master_page_tuples = try buffer_manager.master_root_page.getTuples(master_schema_slice);
+    defer {
+        for (master_page_tuples) |t| {
+            t.deinit();
+        }
+        allocator.free(master_page_tuples);
+    }
+
+    // print("{s}", .{buffer_manager.page_directory.metadata.signature});
+
+    try tst.expect(master_page_tuples.len > 0);
+    try tst.expect(std.mem.eql(u8, buffer_manager.page_directory.metadata.signature, "dbstar2"));
+
+    // for (master_page_tuples) |t| {
+    //     // const page_id = switch (t.data[2]) {
+    //     //     .bigint_value => |val| val,
+    //     //     else => unreachable,
+    //     // };
+    //     // try tst.expect(page_id == 0);
+    //     print("{any}", .{t});
+    // }
+    // print("{any}", .{buffer_manager.page_directory.metadata});
 }

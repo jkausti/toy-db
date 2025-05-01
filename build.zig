@@ -17,7 +17,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const db = b.createModule(.{
+        .root_source_file = b.path("db/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     exe.root_module.addImport("storage", storage);
+    exe.root_module.addImport("db", db);
+    db.addImport("storage", storage);
 
     b.installArtifact(exe);
 
@@ -33,6 +41,7 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
     });
     test_exe.root_module.addImport("storage", storage);
+    test_exe.root_module.addImport("db", db);
     const run_test = b.addRunArtifact(test_exe);
 
     const test_step = b.step("test", "Run unit tests");

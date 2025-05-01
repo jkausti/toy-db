@@ -16,3 +16,5 @@ zig-cache/
 *.exe
 *.dll
 
+# Avante
+.avante/
