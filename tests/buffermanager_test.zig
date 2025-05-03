@@ -22,7 +22,7 @@ test "masterSchema" {
 
 test "init_BufferManager" {
     const allocator = std.testing.allocator;
-    const file = try std.fs.cwd().createFile("test.db", .{ .read = true, .truncate = true });
+    const file = try std.fs.cwd().createFile("./tests/artifacts/test.db", .{ .read = true, .truncate = true });
 
     var buffer_manager = try BufferManager.init(allocator, "urmom69", null);
     defer buffer_manager.deinit();
@@ -47,7 +47,7 @@ test "init_BufferManager" {
 test "flush" {
     const allocator = std.testing.allocator;
     var buffer_manager = try BufferManager.init(allocator, "urmom69", null);
-    const file = try std.fs.cwd().createFile("test.db", .{ .read = true, .truncate = false });
+    const file = try std.fs.cwd().createFile("./tests/artifacts/test.db", .{ .read = true, .truncate = false });
 
     defer buffer_manager.deinit();
     defer file.close();
@@ -90,7 +90,7 @@ test "updateMaster" {
 
 test "createTable" {
     const allocator = std.testing.allocator;
-    const file = try std.fs.cwd().createFile("test.db", .{ .read = true, .truncate = true });
+    const file = try std.fs.cwd().createFile("./tests/artifacts/test.db", .{ .read = true, .truncate = true });
 
     var buffer_manager = try BufferManager.init(allocator, "urmom69", null);
     defer buffer_manager.deinit();
@@ -162,7 +162,7 @@ test "createTable" {
 
 test "initFromDisk" {
     const allocator = std.testing.allocator;
-    const file = try std.fs.cwd().openFile("test.db", .{});
+    const file = try std.fs.cwd().openFile("./tests/artifacts/test.db", .{});
     defer file.close();
 
     var buffer_manager = try BufferManager.init(allocator, null, file);
@@ -180,18 +180,6 @@ test "initFromDisk" {
         allocator.free(master_page_tuples);
     }
 
-    // print("{s}", .{buffer_manager.page_directory.metadata.signature});
-
     try tst.expect(master_page_tuples.len > 0);
     try tst.expect(std.mem.eql(u8, buffer_manager.page_directory.metadata.signature, "dbstar2"));
-
-    // for (master_page_tuples) |t| {
-    //     // const page_id = switch (t.data[2]) {
-    //     //     .bigint_value => |val| val,
-    //     //     else => unreachable,
-    //     // };
-    //     // try tst.expect(page_id == 0);
-    //     print("{any}", .{t});
-    // }
-    // print("{any}", .{buffer_manager.page_directory.metadata});
 }
