@@ -65,6 +65,10 @@ pub const Database = struct {
         self.db_file_handle.close();
     }
 
+    pub fn persist(self: *Database) !void {
+        try self.buffer_manager.flush(self.db_file_handle);
+    }
+
     // pub fn createTable(
     //     self: Database,
     //     schema_name: []const u8,

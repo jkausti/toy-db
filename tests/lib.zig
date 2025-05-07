@@ -7,6 +7,10 @@ const db = @import("db");
 
 pub fn main() !void {
     std.testing.refAllDecls(@This());
+
+    // setup
+    std.testing.refAllDecls(@import("setup.zig"));
+
     // add tests here
     std.testing.refAllDecls(@import("buffermanager_test.zig"));
     std.testing.refAllDecls(@import("page_test.zig"));

@@ -21,11 +21,12 @@ test "db_init_existing" {
 
 test "db_init_new" {
     const allocator = std.testing.allocator;
-    const db_path = "./tests/artifacts/test_new.db";
+    const db_path = "./tests/artifacts/test_newdb";
     const abs_path = try cli_helpers.getAbsPath(allocator, db_path);
     defer allocator.free(abs_path);
 
     var db = try Database.init(allocator, abs_path, false);
+    try db.persist();
     defer db.deinit();
 
     try tst.expectEqual(db.buffer_manager.page_directory.metadata.page_count, 2);
