@@ -29,6 +29,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const parser = b.createModule(.{
+        .root_source_file = b.path("parser/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.root_module.addImport("parser", parser);
     exe.root_module.addImport("storage", storage);
     exe.root_module.addImport("db", db);
     db.addImport("storage", storage);
@@ -49,6 +56,7 @@ pub fn build(b: *std.Build) void {
     test_exe.root_module.addImport("storage", storage);
     test_exe.root_module.addImport("db", db);
     test_exe.root_module.addImport("cli", cli);
+    test_exe.root_module.addImport("parser", parser);
     const run_test = b.addRunArtifact(test_exe);
 
     const test_step = b.step("test", "Run unit tests");

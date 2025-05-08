@@ -21,13 +21,6 @@ pub const Database = struct {
                 const file = try std.fs.openFileAbsolute(absolute_db_path, .{ .mode = .read_write });
                 var signature = [_]u8{0} ** 7;
                 _ = try file.read(&signature);
-                print("Signature: {s}\n", .{signature});
-                if (std.mem.eql(u8, &signature, "dbstar2")) {
-                    print("File is a valid database.\n", .{});
-                } else {
-                    print("File is not a valid database.\n", .{});
-                    return DBError.InvalidDatabase;
-                }
                 break :blk file;
             },
             false => try std.fs.createFileAbsolute(absolute_db_path, .{}),

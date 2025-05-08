@@ -17,6 +17,7 @@ pub fn main() !void {
     std.testing.refAllDecls(@import("pagedirectory_test.zig"));
     std.testing.refAllDecls(@import("tuple_test.zig"));
     std.testing.refAllDecls(@import("db_test.zig"));
+    std.testing.refAllDecls(@import("parser_test.zig"));
 }
 
 // This test block ensures that tests are discovered

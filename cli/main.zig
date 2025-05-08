@@ -1,11 +1,12 @@
 const std = @import("std");
+const stdout = std.io.getStdOut().writer();
+const stdin = std.io.getStdIn().reader();
 const Allocator = std.mem.Allocator;
 const helpers = @import("helpers.zig");
 const pathExist = helpers.pathExist;
 const getAbsPath = helpers.getAbsPath;
 const db = @import("db");
 const Database = db.db.Database;
-const stdout = std.io.getStdOut().writer();
 const Dir = std.fs.Dir;
 const File = std.fs.File;
 const testing = std.testng;
@@ -39,10 +40,37 @@ pub fn main() !void {
     defer allocator.free(abs_path);
 
     var db_instance = try Database.init(allocator, abs_path, db_exists);
-    _ = db_instance.buffer_manager.flush(db_instance.db_file_handle) catch |err| {
+    _ = db_instance.persist() catch |err| {
         std.debug.print("Error flushing buffer.\n", .{});
         return err;
     };
+
+    // give user prompt to interact with the database
+    //
+    try stdout.print("\nWelcomez toz ze databaze built with zzzig...🐊\n\n", .{});
+
+    while (true) {
+        try stdout.print("zdb >> ", .{});
+
+        const input = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 8192);
+        defer allocator.free(input.?);
+
+        if (std.mem.eql(u8, input.?, ".q")) {
+            try stdout.print("Byezzz...🐊\n", .{});
+            break;
+        } else if (std.mem.eql(u8, input.?, "help")) {
+            // print help message
+            try stdout.print("\n", .{});
+            try stdout.print("Available commands:\n", .{});
+            try stdout.print("  - .help: show this message\n", .{});
+            try stdout.print("  - .q: quit the program\n", .{});
+            try stdout.print("\n", .{});
+        } else {
+            // parse input into AST
+            const ast = 
+        }
+    }
+
     defer db_instance.deinit();
 }
 
